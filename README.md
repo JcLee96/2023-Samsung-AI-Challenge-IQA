@@ -1,135 +1,126 @@
-# 2023-AI-Samsung-Challenge-Image-Quality-Assessment
+<div align="center">
 
-![image](iqa.png)
+# 2023 Samsung AI Challenge: Image Quality Assessment
 
-![image](ic.png)
+**Final Winner (3rd place) · Team Quiil Lab**
 
-## Datasets
+[![Competition](https://img.shields.io/badge/DACON-Competition-1f6feb)](https://dacon.io/competitions/official/236134/overview/description)
+[![Leaderboard](https://img.shields.io/badge/DACON-Leaderboard-2ea043)](https://dacon.io/competitions/official/236134/leaderboard)
+[![Solution](https://img.shields.io/badge/DACON-Solution%20post-orange)](https://dacon.io/competitions/official/236134/talkboard/409957)
+[![Interview](https://img.shields.io/badge/DACON-Winner%20interview-purple)](https://dacon.io/forum/410484)
+[![Data](https://img.shields.io/badge/DACON-Dataset-lightgrey)](https://dacon.io/competitions/official/236134/data)
 
-All the models in this project were evaluated on the following datasets:
+</div>
 
-- [DACON](https://dacon.io/competitions/official/236134/data) (DACON Site)
+Our solution predicts a mean opinion score (MOS, Task 1) and writes a short critique-style caption (Task 2) for every test image. The two models are combined into a single submission file. It placed **3rd on the final leaderboard** and was selected as a **Final Winner**.
 
-## Description
+![leaderboard](assets/leaderboard.png)
 
-The source code for this solution is based on these two repositories:
-- [MANIQA](https://github.com/IIGROUP/MANIQA): for image quality assessment task (task 1)
-- [M2 Transformer](https://github.com/aimagelab/meshed-memory-transformer): for image captioning task (task 2)
+## Approach
 
-## How to run
+- **Task 1: image quality assessment.** We start from [MANIQA](https://github.com/IIGROUP/MANIQA) and swap its backbone for a hybrid ViT-R50 (`vit_base_r50_s16_384`, 384×384 input). Patch tokens from ViT blocks 7–10 pass through three transposed-attention and Swin stages. A patch-weighted head regresses the MOS.
+- **Ordinal auxiliary head.** The CLS token feeds a scalar head trained with a cross-entropy ordinal (CEO) loss over 21 MOS bins, which is added to the MSE loss. We keep the checkpoint with the best SRCC + PLCC on the validation split.
+- **Task 2: image captioning.** A [Meshed-Memory Transformer](https://github.com/aimagelab/meshed-memory-transformer) (code via [RSTNet](https://github.com/zhangxuying1004/RSTNet)) runs on 7×7 grid features from an X-152 detector ([grid-feats-vqa](https://github.com/facebookresearch/grid-feats-vqa)). It is trained first with cross-entropy and then with SCST (CIDEr reward). Decoding uses beam search (beam 3, max 23 tokens).
 
-Install dependencies
+| Task 1: IQA | Task 2: captioning |
+|---|---|
+| ![iqa](assets/iqa.png) | ![ic](assets/ic.png) |
+
+## Project structure
+
+```
+.
+├── config.py              # all paths (data/, checkpoints/, outputs/) and hyperparameters
+├── inference.py           # end-to-end: captions + MOS -> submission CSV
+├── iqa/                   # Task 1 (MANIQA-based, Apache-2.0, see iqa/LICENSE)
+│   ├── model.py           #   MANIQA + ViT-R50 backbone + ordinal head, CEO loss
+│   ├── swin.py            #   Swin blocks vendored from MANIQA
+│   ├── dataset.py         #   DACON image/MOS dataset and transforms
+│   ├── train.py           #   training loop (python -m iqa.train)
+│   └── predict.py         #   MOS inference
+├── captioning/            # Task 2 (M2 Transformer via RSTNet, BSD-3, see captioning/LICENSE)
+│   ├── models/            #   vendored M2 Transformer + beam search
+│   ├── data/              #   vendored text/feature fields and COCO-style dataset
+│   ├── evaluation/        #   vendored BLEU/METEOR/ROUGE/CIDEr + PTB tokenizer (needs Java)
+│   ├── prepare_data.py    #   COCO-style JSONs + X-152 grid features (HDF5)
+│   ├── train.py           #   XE -> SCST training (python -m captioning.train)
+│   ├── predict.py         #   model building, vocab loading, beam-search captioning
+│   └── vocab.pkl          #   vocabulary used by the submitted model (7,288 tokens)
+├── tests/test_smoke.py    # end-to-end smoke test on random data
+├── assets/                # README figures
+├── requirements.txt
+└── Dockerfile
+```
+
+## Environment
 
 ```bash
-# clone project
-git clone https://github.com/JcLee96/2023-AI-Samsung-Challenge-Image-Quality-Assessment.git
+git clone https://github.com/JcLee96/2023-Samsung-AI-Challenge-IQA.git
+cd 2023-Samsung-AI-Challenge-IQA
 
-
-# [OPTIONAL] create conda environment
-conda create -n 2023samsung python=3.8
-conda activate 2023samsung
-conda install pytorch==1.10.1 torchvision==0.11.2 torchaudio==0.10.1 cudatoolkit=11.3 -c pytorch -c conda-forge
-
+conda create -n samsung2023 python=3.8 && conda activate samsung2023
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm          # tokenizer for captioning training
+# only for grid-feature extraction:
+pip install fvcore==0.1.5.post20221221 'git+https://github.com/facebookresearch/detectron2.git@ffff8ac'
 ```
 
-However, we recommend to use the docker image we provided [here](https://drive.google.com/file/d/1DD8DMOIm-SiVcuparVPb5Hy_3QD3dKPW/view?usp=drive_link). It is already installed all libraries necessary for the training/reproduction of the results. Just download the `quiil_samsung2023_solution.tar` file and perform below command to import the docker image (docker is required to install before doing this):
+Captioning training also needs Java, because the PTB tokenizer and METEOR use `.jar` files.
 
-```
+**Docker.** You can build the image from `Dockerfile` (`docker build -t quiil_samsung2023_solution .`). You can also load the image we used during the competition ([download](https://drive.google.com/file/d/1DD8DMOIm-SiVcuparVPb5Hy_3QD3dKPW/view?usp=drive_link)):
+
+```bash
 docker load < quiil_samsung2023_solution.tar
+docker run -d --shm-size 8G --gpus all -it --name samsung_quiil \
+  --mount type=bind,source=<absolute path of data>,target=/samsung2023_iqa_solution/data \
+  quiil_samsung2023_solution
 ```
 
-After that, activate the container:
-```
-docker run -d --shm-size 8G --gpus '"device=all"' -it --name samsung_quill_container --mount type=bind,source="<absolute folder path of “data” folder>",target=/samsung2023_iqa_solution/data quiil_samsung2023_solution
-```
+## Dataset
 
-For `data` path, please see how to prepare in the upcomming instructions below.
-
-### Data preparation
-
-Step 1: Download the data from the challenge website, including training and testing samples, as below structure:
+Download the competition data from [DACON](https://dacon.io/competitions/official/236134/data). The data is not redistributed here. Put it under `data/`, or point `SAMSUNG_DATA_DIR` to another location:
 
 ```
-data
-|__train
-|____ *.jpg
-|__test
-|____ *.jpg
-|__train.csv
-|__test.csv
-|__train_mos.csv
-|__valid_mos.csv
-```
-Step 2: Then perform the feature extraction for all train and test images (will be used for training image captioning). Do this by the below command:
-
-```
-CUDA_VISIBLE_DEVICE=0 python custom_extract_features.py
+data/
+├── train/*.jpg
+├── test/*.jpg
+├── train.csv        # img_name, img_path, mos, comments
+├── test.csv         # img_name, img_path
+├── train_mos.csv    # img_path, mos  (IQA training split)
+└── valid_mos.csv    # img_path, mos  (IQA validation split)
 ```
 
-After that, we obtain two hdf5 files: `train.hdf5` and `test.hdf5` for training and testing samples, respectively.
+`train_mos.csv` / `valid_mos.csv` hold our train/validation split of `train.csv`, using columns `img_path, mos`.
 
-### External code preparation
+## Usage
 
-* Download `scene_graph_benchmark` [here](https://drive.google.com/file/d/1OCrRdll9MEg2TponCf9dWLwUkxkCwAkO/view?usp=drive_link) and put inside the `MANIQA` folder (used for feature extraction purpose)
-* Download pre-trained checkpoint [here](https://drive.google.com/file/d/1OCrRdll9MEg2TponCf9dWLwUkxkCwAkO/view?usp=drive_link), and put inside `grid-feats-vqa` folder.
+**1. Prepare captioning inputs.** This step writes `data/{train,valid,test}.json` and the grid features `data/{train,test}.hdf5`. First clone [grid-feats-vqa](https://github.com/facebookresearch/grid-feats-vqa) into `./grid-feats-vqa` and put the X-152 checkpoint there as `X-152.pth`. Then run:
 
-### Training phase for image quality assessment (task 1)
-
-To train the image quality assessment task, use the below command:
-
-1. Go to the MANIQA folder:
-
-```
-cd MANIQA
+```bash
+python -m captioning.prepare_data
 ```
 
-2. Train the image quality assessment model:
+**2. Train Task 1 (IQA).** The best checkpoints go to `checkpoints/iqa/epoch{N}.pt`.
 
-```
-CUDA_VISIBLE_DEVICE=0 python train_maniqa_new_vit_Joint2.py
-```
-
-3. Checkpoint will be saved at: `MANIQA_new_vit_or_joint2` folder.
-
-### Training phase for image captioning (task 2)
-
-To train the image captioning task, use the below command:
-
-1. Go to the RSTNet folder:
-
-```
-cd RSTNet
+```bash
+python -m iqa.train
 ```
 
-2. Train the image captioning model:
+**3. Train Task 2 (captioning).** The checkpoints go to `checkpoints/captioning/` (`m2_best.pth`, `rl{N}.pth`).
 
-```
-CUDA_VISIBLE_DEVICE=0 python train_transformer.py --exp_name rstnet --batch_size 50 --m 40 --head 8 --features_path train.hdf5
-```
-
-3. The checkpoints will be saved at `saved_transformer_models_m2`
-
-### End-to-end inference phase
-
-For reproduction purpose, we provide the best checkpoints for each task:
-
-1. Best checkpoint for task 1 (epoch_ic.pt): [here]()
-2. Best checkpoint for task 2 (epoch_iqa.pt): [here]()
-
-Download them at put inside `checkpoints` folder.
-
-Then, run the below command:
-
-```
-CUDA_VISIBLE_DEVICES=0 python end_to_end_inference.py
+```bash
+python -m captioning.train
 ```
 
-Results are stored in `Full_submission.csv`, which is ready for submission. The results helped us to secure the final third ranking (fourth ranking on the final leaderboard)
+**4. End-to-end inference.** Copy the chosen weights to `checkpoints/epoch_iqa.pt` and `checkpoints/epoch_ic.pt`, or pass `--iqa-ckpt` / `--ic-ckpt`. Then run:
 
-![image](leaderboard.png)
+```bash
+python inference.py            # -> outputs/submission.csv  (img_name,mos,comments)
+```
 
-First 20 rows of final submission:
+Captions are cached in `outputs/predicted_captions.json`. Delete that file to recompute them.
+
+First rows of our final submission:
 
 ```
 img_name,mos,comments
@@ -137,20 +128,23 @@ j00zs3u6dr,6.3342686,i love the colors and the clarity of this image
 ytv70so3zb,6.0468326,i m not sure what this is but i think it would have been better with a little more contrast
 ia9890oozp,6.021466,i like the use of selective desaturation in this photo
 xsj81ypx4a,5.4849973,i think this would have worked better in bw with a little more contrast
-f23994ghlh,5.716955,i like the use of bw in this photo it looks like a <unk>
-olzx3kqzij,6.2476077,i like the use of black and white in this image
-pzhsjj4uxo,6.6428676,i like the contrast of the clouds and the <unk>
-2mb38w9n83,6.1964545,i like the idea but the image is a bit too dark
-cz4tby7pfx,5.6829925,a reasonable use of hdr but not a very engaging photo in my opinion
-8099bltbox,5.142827,i like the idea but the image is a bit too dark
-4fxgmbki70,5.058069,i m not sure what i m looking at but i m not sure what it is but i think it is a
-398sev5zra,5.54492,i like the idea but the image is a little too dark
-397dr2njq3,4.183466,i like the idea but the image is a bit too dark
-8l24x7ueri,4.505504,i like the use of color in this one
-0payszbeft,5.3249483,i really like the texture and the <unk>
-5706ozsu0u,4.810112,i like the texture of this image and the <unk>
-tvpgpvwu9y,4.365091,i like the idea of this image but the image is a little too dark for my taste i think it would have
-0dwf6bs8mo,4.719687,nice use of color and light
-lzqw1192vq,5.5744343,i like the colors and the idea of this photo
-1usse6jnw8,5.216581,i like the idea but the image is a bit too much for my taste it seems a bit flat
 ```
+
+## Smoke test
+
+This builds a tiny random dataset with numpy. It trains and runs the IQA model for one epoch (random init, smaller hybrid ViT by default), runs one captioning training step plus greedy and beam decoding on random 49×2048 grid features, and writes and checks a submission CSV. No downloads or checkpoints are needed.
+
+```bash
+python tests/test_smoke.py                       # CPU, about 1-2 min
+SMOKE_DEVICE=cuda SMOKE_FULL_BACKBONE=1 python tests/test_smoke.py   # real ViT-R50 backbone on GPU
+```
+
+## Acknowledgements
+
+- [MANIQA](https://github.com/IIGROUP/MANIQA) (Apache-2.0): IQA architecture and Swin blocks.
+- [Meshed-Memory Transformer](https://github.com/aimagelab/meshed-memory-transformer) and [RSTNet](https://github.com/zhangxuying1004/RSTNet) (BSD-3-Clause): captioning model, data pipeline and evaluation code.
+- [grid-feats-vqa](https://github.com/facebookresearch/grid-feats-vqa) and [detectron2](https://github.com/facebookresearch/detectron2): X-152 grid features.
+- [timm](https://github.com/huggingface/pytorch-image-models): ViT-R50 backbone.
+
+## License
+Project code is released under the [MIT License](LICENSE). Vendored code keeps its original license: `iqa/` (MANIQA, Apache-2.0) and `captioning/` (RSTNet / M2 Transformer, BSD-3-Clause).

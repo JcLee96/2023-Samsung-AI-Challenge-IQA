@@ -1,0 +1,28 @@
+# Competition data (download from DACON) and derived inputs
+data/
+*.hdf5
+
+# Checkpoints, logs and outputs
+checkpoints/
+outputs/
+*.pt
+*.pth
+*.log
+*.csv
+*.json
+
+# External repository cloned for feature extraction
+grid-feats-vqa/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
